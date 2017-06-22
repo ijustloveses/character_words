@@ -112,3 +112,19 @@ func GetBucket(s string, bucket uint32) uint32 {
 	h.Write([]byte(s))
 	return h.Sum32() % bucket
 }
+
+func ChisquareModified(cnt_term_category float32, cnt_category float32, cnt_term float32, cnt_whole float32) float32 {
+	/*
+	   cnt_term_category: 在 category 中 term 的出现次数
+	   cnt_category: 在 category 中出现的所有 terms 的总数
+	   cnt_term: term 在所有 categories 中出现的总数
+	   cnt_whole: 所有 categories 中出现的所有 terms 的总数
+	*/
+	E1 := cnt_term / cnt_whole * cnt_category
+	E2 := cnt_term / cnt_whole * (cnt_whole - cnt_category)
+	T1 := cnt_term_category * math.log(cnt_term_category/E1)
+	cnt_other := cnt_term - cnt_term_category
+	T2 = cnt_other * math.log(cnt_other/E2)
+	LL := 2.0 * (T1 + T2)
+	return LL
+}

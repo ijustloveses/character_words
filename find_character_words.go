@@ -23,6 +23,12 @@ type catedetail struct {
 	detail map[string]int
 }
 
+type terminfo struct {
+	text string
+	cate string
+	count int
+}
+
 func walkFiles(done <-chan struct{}, root string) (<-chan string, <-chan error) {
 	/*
 	   遍历目录，每当找到合适的文件，发送到 channel 中，单 goroutine 运行
@@ -84,7 +90,7 @@ func process_sentence(numWorkers uint32, done <-chan struct{}, files <-chan stri
 	}
 }
 
-func CountFiles(maxlength int, root string, numWorkers int) (map[string]*Word, int) {
+func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 	done := make(chan struct{})
 	defer close(done) // 如果程序退出，那么也会关掉 done channel，进而各个 goroutine 就得到异常退出的信息，会各自退出
 
@@ -130,7 +136,7 @@ func CountFiles(maxlength int, root string, numWorkers int) (map[string]*Word, i
 	wg_recv.Add(numWorkers + 1)
 	// 单 goroutine 中读取 c，由于单 goroutine，必然不会 race condition，故此不需要对外部变量加锁
 	// 这个步骤相对 trivial 故此没有按桶分别处理
-	go func(c <-chan catecount) {
+	go func(c map[uint32](chan<- catecount)) {
 		for _, ch := range c {
 			for cc := range ch {
 				corpus_length += cc.count
@@ -152,12 +158,12 @@ func CountFiles(maxlength int, root string, numWorkers int) (map[string]*Word, i
 			category_term_count := make(map[string](map[string]int))
 			term_count := make(map[string]int)
 			for cd := range ch {
+				_, ok := category_term_count[cd.cate]
+				if !ok {
+					category_term_count[cd.cate] = make(map[string]int)
+				}
 				for t, c := range cd.detail {
 					term_count[t] += c
-					_, ok := category_term_count[cd.cate]
-					if !ok {
-						category_term_count[cd.cate] = make(map[string]int)
-					}
 					category_term_count[cd.cate][t] += c
 				}
 			}
@@ -196,6 +202,7 @@ func CountFiles(maxlength int, root string, numWorkers int) (map[string]*Word, i
 		wg_merge.Done()
 	}()
 	go func() {
+		# 由于分桶的，故此这里不需要做比较，每次遍历一定都是新的种类
 		for ctc := range ch_cate {
 			for cate, detail := range ctc {
 				category_term_count[cate] = detail
@@ -203,45 +210,41 @@ func CountFiles(maxlength int, root string, numWorkers int) (map[string]*Word, i
 		}
 		wg_merge.Done()
 	}()
+	// 同步等待，这里 4 个外部变量全部完成统计
 	wg_merge.Wait()
-	// 同步等待，这里得到最终结果 words
 	if err := <-errc; err != nil {
 		fmt.Println("Err:", err)
 	}
-	return words, corpus_length
-}
 
-func chisquare_modified(cnt_term_category float32, cnt_category float32, cnt_term float32, cnt_whole float32) {
-	/*
-	   cnt_term_category: 在 category 中 term 的出现次数
-	   cnt_category: 在 category 中出现的所有 terms 的总数
-	   cnt_term: term 在所有 categories 中出现的总数
-	   cnt_whole: 所有 categories 中出现的所有 terms 的总数
-	*/
-	E1 := cnt_term / cnt_whole * cnt_category
-	E2 := cnt_term / cnt_whole * (cnt_whole - cnt_category)
-	T1 := cnt_term_category * math.log(cnt_term_category/E1)
-	cnt_other := cnt_term - cnt_term_category
-	T2 = cnt_other * math.log(cnt_other/E2)
-	LL := 2.0 * (T1 + T2)
-	return LL
+	// 到这里还没出错的话，那么继续计算 chi-square
+	cterm := make(chan terminfo) 
+	go func() {
+		for cate, detail := range category_term_count {
+			for t, c := range detail {
+				cterm <- terminfo{t, cate, c}
+			}
+		}
+	}()
+
+	var wgfinal WaitGroup
+	wgfinal.Add(numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			defer wgfinal.Done()
+			for term := range cterm {
+				ll := ChisquareModified(float32(term.count), float32(category_length[term.cate]), float32(term_count[term.text]), float32(corpus_length))
+			}
+		}
+	}
+	wgfinal.Wait()
 }
 
 func main() {
 	numWorkers := 20
 	numCores := 20
-	maxlength := 5
 	runtime.GOMAXPROCS(numCores)
 	start := time.Now().UnixNano()
-	words, corpus_length := CountFiles(maxlength, "./", numWorkers)
+	CountFiles("./", numWorkers)
 	counting_done := time.Now().UnixNano()
 	fmt.Println("[Counting]:", TimeCost(start, counting_done))
-	statEntropy(words, numWorkers)
-	stat_done := time.Now().UnixNano()
-	fmt.Println("[Entropy]:", TimeCost(counting_done, stat_done))
-	score(words, corpus_length, numWorkers)
-	score_done := time.Now().UnixNano()
-	fmt.Println("[Score]:", TimeCost(stat_done, score_done))
-	dumpFile("candidates_statistics.go.csv", words)
-	fmt.Println("[Dump]:", TimeCost(score_done, time.Now().UnixNano()))
 }
