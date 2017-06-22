@@ -59,8 +59,7 @@ for f, terms in counts.iteritems():
             scores[f][term] = chisquare_modified(cnt, cnt_category, cnt_term, cnt_whole)
 
 # result precessing
-for f, terms in scores.iteritems():
-    print "------------- {} -------------".format(f)
-    top50 = sorted(terms.items(), key=lambda x: x[1], reverse=True)[0:50]
-    for term, score in top50:
-        print u"{}\t{}".format(term, score)
+with codecs.open('chi_squares.py.res', 'w', 'utf-8') as fp:
+	for f, terms in scores.iteritems():
+		for t, s in terms.iteritems():
+			fp.write(u"{}\t{}\t{}\t{}\n".format(t, f, counts[f][t], s))

@@ -29,6 +29,13 @@ type terminfo struct {
 	count int
 }
 
+type termresult struct {
+	text string
+	cate string
+	count int
+	score float32
+}
+
 func walkFiles(done <-chan struct{}, root string) (<-chan string, <-chan error) {
 	/*
 	   遍历目录，每当找到合适的文件，发送到 channel 中，单 goroutine 运行
@@ -213,10 +220,11 @@ func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 	// 同步等待，这里 4 个外部变量全部完成统计
 	wg_merge.Wait()
 	if err := <-errc; err != nil {
-		fmt.Println("Err:", err)
+		CheckError(err)
 	}
 
 	// 到这里还没出错的话，那么继续计算 chi-square
+	// 每个种类下出现的词，送入 queue 中
 	cterm := make(chan terminfo) 
 	go func() {
 		for cate, detail := range category_term_count {
@@ -226,17 +234,35 @@ func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 		}
 	}()
 
+	// numWorkers 个 goroutines 去处理
+	// 结果送入结果 channel
+	cresult := make(chan termresult)
 	var wgfinal WaitGroup
 	wgfinal.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		go func() {
 			defer wgfinal.Done()
 			for term := range cterm {
-				ll := ChisquareModified(float32(term.count), float32(category_length[term.cate]), float32(term_count[term.text]), float32(corpus_length))
+				if term.count == term_count[term.text] {
+					ll := 99999.0
+				} else {
+					ll := ChisquareModified(float32(term.count), float32(category_length[term.cate]), float32(term_count[term.text]), float32(corpus_length))
+				}
+				cresult <- termresult{term.t, term.cate, term.count, ll}
 			}
-		}
+		}()
 	}
-	wgfinal.Wait()
+	// 异步等待全部处理结束
+	go func() {
+		wgfinal.Wait()
+		close(cresult)
+	}()
+	// 整理结果
+	final_result := []string{}
+	for tr := range termresult {
+		final_result = append(final_result, fmt.Sprintf("%s\t%s\t%d\t%f", tr.text, tr.cate, tr.count, tr.score))
+	}
+	WriteStringsToFile("chi_squares.go.res", final_result, 0644)
 }
 
 func main() {
