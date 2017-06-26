@@ -3,8 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,7 +31,7 @@ type termresult struct {
 	text string
 	cate string
 	count int
-	score float32
+	score float64
 }
 
 func walkFiles(done <-chan struct{}, root string) (<-chan string, <-chan error) {
@@ -65,7 +63,7 @@ func walkFiles(done <-chan struct{}, root string) (<-chan string, <-chan error) 
 	return files, errc
 }
 
-func process_sentence(numWorkers uint32, done <-chan struct{}, files <-chan string, c map[uint32](chan<- catecount), l map[uint32](chan<- catedetail)) {
+func process_sentence(numWorkers uint32, done <-chan struct{}, files <-chan string, c map[uint32](chan catecount), l map[uint32](chan catedetail)) {
 	/*
 	   这个函数会被多个 goroutine 运行，故此函数中没有 close channel l & c
 	   每读到一个句子，读出已经分好的词，做统计，再把文件中的总词数，以及每个词的数量分别发送到对应桶的 c & l
@@ -75,12 +73,12 @@ func process_sentence(numWorkers uint32, done <-chan struct{}, files <-chan stri
 		cntTerm := make(map[string]int)
 		lines, err := LoadFileToStrings(path)
 		CheckError(err)
-		for line := range lines {
-			for term := range strings.Split(line, " ") {
+		for _, line := range lines {
+			for _, term := range strings.Split(line, " ") {
 				cntTerm[term] += 1
 			}
 		}
-		for t, c := range cntTerm {
+		for _, c := range cntTerm {
 			cntWhole += c
 		}
 		b := GetBucket(path, numWorkers)
@@ -97,7 +95,7 @@ func process_sentence(numWorkers uint32, done <-chan struct{}, files <-chan stri
 	}
 }
 
-func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
+func CountFiles(root string, numWorkers int) {
 	done := make(chan struct{})
 	defer close(done) // 如果程序退出，那么也会关掉 done channel，进而各个 goroutine 就得到异常退出的信息，会各自退出
 
@@ -105,13 +103,13 @@ func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 	files, errc := walkFiles(done, root)
 
 	// 分别初始化 numWorkers 个 count channels 和 detail channal
-	c := map[uint32](chan<- catecount){}
+	c := map[uint32](chan catecount){}
 	for i := 0; i < numWorkers; i++ {
-		c[uint32(i)] = make(chan<- catecount)
+		c[uint32(i)] = make(chan catecount)
 	}
-	l := map[uint32](chan<- catedetail){}
+	l := map[uint32](chan catedetail){}
 	for i := 0; i < numWorkers; i++ {
-		l[uint32(i)] = make(chan<- catedetail)
+		l[uint32(i)] = make(chan catedetail)
 	}
 	var wg sync.WaitGroup
 	// numWorkers 个 goroutine 运行 process_sentence 函数，于是 files, c, l 几个 channel 都在 goroutine 中形成一个工作流运行
@@ -140,10 +138,11 @@ func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 	corpus_length := 0
 	category_length := make(map[string]int)
 	// waitgroup 等待 numWorkers + 1 个任务，一个读 c，numWorkers 个读 l 中对应的 channel
+	var wg_recv sync.WaitGroup
 	wg_recv.Add(numWorkers + 1)
 	// 单 goroutine 中读取 c，由于单 goroutine，必然不会 race condition，故此不需要对外部变量加锁
 	// 这个步骤相对 trivial 故此没有按桶分别处理
-	go func(c map[uint32](chan<- catecount)) {
+	go func(c map[uint32](chan catecount)) {
 		for _, ch := range c {
 			for cc := range ch {
 				corpus_length += cc.count
@@ -209,7 +208,7 @@ func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 		wg_merge.Done()
 	}()
 	go func() {
-		# 由于分桶的，故此这里不需要做比较，每次遍历一定都是新的种类
+		// 由于分桶的，故此这里不需要做比较，每次遍历一定都是新的种类
 		for ctc := range ch_cate {
 			for cate, detail := range ctc {
 				category_term_count[cate] = detail
@@ -237,18 +236,19 @@ func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 	// numWorkers 个 goroutines 去处理
 	// 结果送入结果 channel
 	cresult := make(chan termresult)
-	var wgfinal WaitGroup
+	var wgfinal sync.WaitGroup
 	wgfinal.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		go func() {
 			defer wgfinal.Done()
 			for term := range cterm {
+				var ll float64 = 0.0
 				if term.count == term_count[term.text] {
-					ll := 99999.0
+					ll = 99999.0
 				} else {
-					ll := ChisquareModified(float32(term.count), float32(category_length[term.cate]), float32(term_count[term.text]), float32(corpus_length))
+					ll = ChisquareModified(float64(term.count), float64(category_length[term.cate]), float64(term_count[term.text]), float64(corpus_length))
 				}
-				cresult <- termresult{term.t, term.cate, term.count, ll}
+				cresult <- termresult{term.text, term.cate, term.count, ll}
 			}
 		}()
 	}
@@ -259,7 +259,7 @@ func CountFiles(root string, numWorkers int) (map[string]*Word, int) {
 	}()
 	// 整理结果
 	final_result := []string{}
-	for tr := range termresult {
+	for tr := range cresult {
 		final_result = append(final_result, fmt.Sprintf("%s\t%s\t%d\t%f", tr.text, tr.cate, tr.count, tr.score))
 	}
 	WriteStringsToFile("chi_squares.go.res", final_result, 0644)

@@ -1,7 +1,7 @@
 package main
 
 import (
-	// "fmt"
+	"math"
 	"hash/fnv"
 	"io/ioutil"
 	"os"
@@ -56,36 +56,6 @@ func TimeCost(start int64, end int64) float64 {
 	return float64(end-start) / float64(1000000*1000)
 }
 
-func MergeWord(words map[string]*Word, w *Word) {
-	var text string = w.text
-	_, ok := words[text]
-	if !ok {
-		words[text] = w
-	} else {
-		words[text].freq += w.freq
-		for r, c := range w.left {
-			words[text].left[r] += c
-		}
-		for r, c := range w.right {
-			words[text].right[r] += c
-		}
-	}
-}
-
-func MergeMap(words map[string]*Word, source map[string]*Word) {
-	for _, w := range source {
-		MergeWord(words, w)
-	}
-	source = make(map[string]*Word)
-}
-
-func MergeMapNoConflict(words map[string]*Word, source map[string]*Word) {
-	for text, w := range source {
-		words[text] = w
-	}
-	source = make(map[string]*Word)
-}
-
 func CheckError(e error) {
 	if e != nil {
 		panic(e)
@@ -113,7 +83,7 @@ func GetBucket(s string, bucket uint32) uint32 {
 	return h.Sum32() % bucket
 }
 
-func ChisquareModified(cnt_term_category float32, cnt_category float32, cnt_term float32, cnt_whole float32) float32 {
+func ChisquareModified(cnt_term_category float64, cnt_category float64, cnt_term float64, cnt_whole float64) float64 {
 	/*
 	   cnt_term_category: 在 category 中 term 的出现次数
 	   cnt_category: 在 category 中出现的所有 terms 的总数
@@ -122,9 +92,9 @@ func ChisquareModified(cnt_term_category float32, cnt_category float32, cnt_term
 	*/
 	E1 := cnt_term / cnt_whole * cnt_category
 	E2 := cnt_term / cnt_whole * (cnt_whole - cnt_category)
-	T1 := cnt_term_category * math.log(cnt_term_category/E1)
+	T1 := cnt_term_category * math.Log(cnt_term_category/E1)
 	cnt_other := cnt_term - cnt_term_category
-	T2 = cnt_other * math.log(cnt_other/E2)
+	T2 := cnt_other * math.Log(cnt_other/E2)
 	LL := 2.0 * (T1 + T2)
 	return LL
 }
