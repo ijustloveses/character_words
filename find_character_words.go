@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -22,14 +23,14 @@ type catedetail struct {
 }
 
 type terminfo struct {
-	text string
-	cate string
+	text  string
+	cate  string
 	count int
 }
 
 type termresult struct {
-	text string
-	cate string
+	text  string
+	cate  string
 	count int
 	score float64
 }
@@ -142,12 +143,25 @@ func CountFiles(root string, numWorkers int) {
 	wg_recv.Add(numWorkers + 1)
 	// 单 goroutine 中读取 c，由于单 goroutine，必然不会 race condition，故此不需要对外部变量加锁
 	// 这个步骤相对 trivial 故此没有按桶分别处理
+	// 但是，不能简单的采用 for 循环去遍历每个 c 中的 channel，否则比如选中的是没有数据的 channel，那么最后就死锁了
+	// 应该使用 select；但是对于 array of channels，使用 reflect.Select()
 	go func(c map[uint32](chan catecount)) {
+		cases := make([]reflect.SelectCase, 0, len(c))
 		for _, ch := range c {
-			for cc := range ch {
-				corpus_length += cc.count
-				category_length[cc.cate] += cc.count
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)})
+		}
+		remaining := len(c)
+		// 还有剩余的 channel 没有读取完
+		for remaining > 0 {
+			chosen, cc, ok := reflect.Select(cases)
+			// 如果 channel 读取完毕
+			if !ok {
+				cases[chosen].Chan = reflect.ValueOf(nil)
+				remaining -= 1
+				continue
 			}
+			corpus_length += cc.count
+			category_length[cc.cate] += cc.count
 		}
 		wg_recv.Done()
 	}(c)
@@ -224,7 +238,7 @@ func CountFiles(root string, numWorkers int) {
 
 	// 到这里还没出错的话，那么继续计算 chi-square
 	// 每个种类下出现的词，送入 queue 中
-	cterm := make(chan terminfo) 
+	cterm := make(chan terminfo)
 	go func() {
 		for cate, detail := range category_term_count {
 			for t, c := range detail {
