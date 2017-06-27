@@ -160,8 +160,10 @@ func CountFiles(root string, numWorkers int) {
 				remaining -= 1
 				continue
 			}
-			corpus_length += cc.count
-			category_length[cc.cate] += cc.count
+			cnt := int(cc.FieldByName("count").Int())
+			category := cc.FieldByName("cate").String()
+			corpus_length += cnt
+			category_length[category] += cnt
 		}
 		wg_recv.Done()
 	}(c)
@@ -235,11 +237,11 @@ func CountFiles(root string, numWorkers int) {
 	if err := <-errc; err != nil {
 		CheckError(err)
 	}
-
 	// 到这里还没出错的话，那么继续计算 chi-square
 	// 每个种类下出现的词，送入 queue 中
 	cterm := make(chan terminfo)
 	go func() {
+		defer close(cterm)
 		for cate, detail := range category_term_count {
 			for t, c := range detail {
 				cterm <- terminfo{t, cate, c}

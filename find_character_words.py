@@ -53,7 +53,7 @@ for f, terms in counts.iteritems():
         cnt_term = count_terms[term]
         # 如果该 term 只有本 category 中存在，那么满分 MAX_SCORE
         if cnt_term == cnt:
-            # scores[f][term] = MAX_SCORE
+            scores[f][term] = MAX_SCORE
             continue
         else:
             scores[f][term] = chisquare_modified(cnt, cnt_category, cnt_term, cnt_whole)
